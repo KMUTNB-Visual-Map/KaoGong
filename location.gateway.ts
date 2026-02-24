@@ -2,70 +2,50 @@ import {
   WebSocketGateway,
   WebSocketServer,
   SubscribeMessage,
-  OnGatewayConnection,
-  OnGatewayDisconnect,
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { GuestService } from './guest.service'; // นำเข้า Service ที่เราเขียนไว้
+import { LocationService } from './location.service';
 
-// ตั้งค่า Gateway (เปิด CORS ให้ Frontend ต่อเข้ามาได้)
 @WebSocketGateway({
-  cors: {
-    origin: '*', // ตอน Deploy จริงควรเปลี่ยนเป็น URL ของ Frontend
-  },
-  namespace: '/location', // กำหนด Endpoint (เช่น ws://localhost:3000/location)
+  cors: { origin: '*' },
+  namespace: '/location', // Endpoint: ws://domain/location
 })
-export class LocationGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class LocationGateway {
   @WebSocketServer()
   server: Server;
 
-  // Inject GuestService เข้ามาใช้งาน
-  constructor(private readonly guestService: GuestService) {}
+  // Inject Service เข้ามาเพื่อเอาไว้คุยกับ Database
+  constructor(private readonly locationService: LocationService) {}
 
-  // --------------------------------------------------------
-  // 1. Event: เมื่อมี Client เชื่อมต่อเข้ามา (Connect)
-  // --------------------------------------------------------
-  handleConnection(client: Socket) {
-    console.log(`🟢 Client connected: ${client.id}`);
-    
-    // ทริค: อาจจะให้ Client ส่ง guest_id มาตอนต่อ Socket เพื่อ Verify เลยก็ได้
-    // const guestId = client.handshake.query.guest_id;
-  }
-
-  // --------------------------------------------------------
-  // 2. Event: เมื่อ Client หลุดการเชื่อมต่อ (Disconnect)
-  // --------------------------------------------------------
-  handleDisconnect(client: Socket) {
-    console.log(`🔴 Client disconnected: ${client.id}`);
-  }
-
-  // --------------------------------------------------------
-  // 3. Event: รับพิกัด GPS และ Calibration จาก Frontend
-  // --------------------------------------------------------
-  @SubscribeMessage('sync_location')
-  async handleSyncLocation(
+  // ---------------------------------------------------------
+  // รับ Event 'sync_gps' จาก Frontend
+  // ---------------------------------------------------------
+  @SubscribeMessage('sync_gps')
+  async handleSyncGps(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: any, // รับ Data ที่ส่งมาจาก Frontend
+    @MessageBody() payload: { guest_id: string; lat: number; lng: number }
   ) {
     try {
-      console.log(`📍 Received location from ${client.id}:`, payload);
+      // 1. Persistence: โยนข้อมูลไปให้ Service บันทึกลง Database
+      await this.locationService.saveLocation(payload);
 
-      // 1. ตรวจสอบ/สร้าง Guest (ถ้ายังไม่มี)
-      await this.guestService.verifyGuest(payload.guest_id);
+      // 2. Broadcast: กระจายพิกัดใหม่ไปให้ "ทุกคนยกเว้นคนส่ง" (เพื่อประหยัดแบนด์วิดท์)
+      // ถ้าอยากให้ส่งหาทุกคนรวมถึงตัวเองด้วย ให้ใช้ this.server.emit(...)
+      client.broadcast.emit('update_map', {
+        guest_id: payload.guest_id,
+        lat: payload.lat,
+        lng: payload.lng,
+        timestamp: new Date().toISOString(),
+      });
 
-      // 2. บันทึกข้อมูล GPS ลง Database
-      await this.guestService.saveCalibrationData(payload);
+      // 3. Acknowledge: ตอบกลับคนส่งว่า "ระบบบันทึกและกระจายให้แล้วนะ"
+      return { status: 'success', message: 'GPS synced and broadcasted' };
 
-      // 3. (Optional) ส่งข้อมูลที่อัปเดตกลับไปหาทุกคนในแผนที่ (Broadcasting)
-      // this.server.emit('update_map', { guest_id: payload.guest_id, gps: payload.gps });
-
-      return { status: 'success', message: 'Location synced' }; // ตอบกลับคนส่ง
-      
     } catch (error) {
-      console.error(`❌ Error syncing location:`, error.message);
-      return { status: 'error', message: error.message };
+      console.error(`❌ Error syncing GPS for ${payload.guest_id}:`, error.message);
+      return { status: 'error', message: 'Failed to sync GPS' };
     }
   }
 }
