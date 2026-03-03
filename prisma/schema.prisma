@@ -1,0 +1,120 @@
+// 1. ตั้งค่า Generator และเปิดใช้งาน PostGIS Extension
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"] // สำคัญมาก: ต้องเปิดฟีเจอร์นี้
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis] // สั่งให้ PostgreSQL โหลด PostGIS มาใช้งาน
+}
+
+// ---------------------------------------------------------
+// 2. ตารางที่ "ข้าวกล้อง" (คุณ) ต้องใช้งานหลักๆ (Core Logic)
+// ---------------------------------------------------------
+
+model guest_users {
+  guest_id    String         @id @db.VarChar(8) // ID สุ่ม 8 หลักจาก Frontend [cite: 65, 66]
+  created_at  DateTime       @default(now()) @db.Timestamp() [cite: 67]
+  last_active DateTime       @default(now()) @db.Timestamp() [cite: 68]
+
+  // ความสัมพันธ์ (1 User มีได้หลายพิกัด/เส้นทาง)
+  calibrations calibrations[]
+  routes       routes[]
+}
+
+model calibrations {
+  calibration_id Int      @id @default(autoincrement()) [cite: 64]
+  guest_id       String   @db.VarChar(8) [cite: 65, 66]
+  floor_id       Int      [cite: 69]
+  created_at     DateTime @default(now()) @db.Timestamp() [cite: 69]
+
+  // 📍 ฟิลด์เก็บพิกัดแผนที่ (PostGIS)
+  // ใช้ Unsupported เพราะ Prisma ไม่รู้จัก Geometry แบบ Native
+  // แต่เราสามารถใช้ Prisma .$executeRaw()` สั่ง ST_MakePoint ได้ตามปกติ
+  geom           Unsupported("geometry(Point, 4326)") [cite: 69]
+
+  // ความสัมพันธ์
+  guest_user     guest_users @relation(fields: [guest_id], references: [guest_id])
+  floor          floors      @relation(fields: [floor_id], references: [floor_id])
+}
+
+// ---------------------------------------------------------
+// 3. ตารางโครงสร้างแผนที่ (Map Data) สำหรับพี่กิมจิ / กล้า
+// ---------------------------------------------------------
+
+model floors {
+  floor_id    Int    @id @default(autoincrement()) [cite: 26, 27]
+  floor_name  String @db.VarChar(50) [cite: 28]
+  floor_level Int    [cite: 28]
+
+  nodes        nodes[]
+  edges        edges[]
+  calibrations calibrations[]
+}
+
+model nodes {
+  node_id  Int      @id @default(autoincrement()) [cite: 30, 31]
+  floor_id Int      [cite: 32]
+  type     String   @db.VarChar(50) [cite: 35, 36]
+  name_th  String?  @db.VarChar(100) [cite: 38, 39]
+  name_en  String?  @db.VarChar(100)
+  
+  geom     Unsupported("geometry(Point, 4326)") [cite: 33, 34]
+
+  floor    floors     @relation(fields: [floor_id], references: [floor_id])
+  location location[]
+}
+
+model edges {
+  edge_id  Int   @id @default(autoincrement()) [cite: 18, 19]
+  source   Int   [cite: 20]
+  target   Int   [cite: 21]
+  cost     Float [cite: 24]
+  floor_id Int   
+  
+  geom     Unsupported("geometry(LineString, 4326)") [cite: 22, 23]
+
+  floor    floors @relation(fields: [floor_id], references: [floor_id])
+}
+
+// ตารางสถานที่สำคัญ (Landmarks) [cite: 14]
+model location {
+  location_id Int     @id @default(autoincrement()) [cite: 47, 48]
+  node_id     Int     [cite: 51]
+  name_th     String  @db.VarChar(100) [cite: 55, 56]
+  name_en     String  @db.VarChar(100) [cite: 57]
+  image_url   String? @db.VarChar(255) [cite: 58]
+  description String? @db.Text [cite: 59]
+
+  node        nodes   @relation(fields: [node_id], references: [node_id])
+}
+
+// ---------------------------------------------------------
+// 4. ตารางระบบนำทาง (Navigation) สำหรับพี่ลีซอ
+// ---------------------------------------------------------
+
+model routes {
+  route_id   Int      @id @default(autoincrement()) [cite: 40]
+  guest_id   String   @db.VarChar(8) [cite: 41, 42]
+  start_node Int      [cite: 43]
+  end_node   Int      [cite: 45]
+  mode       String   @db.VarChar(20) [cite: 49]
+  created_at DateTime @default(now()) @db.Timestamp() [cite: 53, 54]
+
+  guest_user guest_users @relation(fields: [guest_id], references: [guest_id])
+  paths      route_paths[]
+}
+
+model route_paths {
+  path_id  Int @id @default(autoincrement()) [cite: 50]
+  route_id Int [cite: 51, 52]
+  seq      Int 
+  node_id  Int 
+  floor_id Int 
+
+  geom     Unsupported("geometry(Point, 4326)") [cite: 60]
+
+  route    routes @relation(fields: [route_id], references: [route_id])
+}
