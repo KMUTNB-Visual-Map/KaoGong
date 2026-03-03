@@ -6,46 +6,43 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { LocationService } from './location.service';
+import { CoreLogicService, PositionPayload } from './core-logic.service';
 
 @WebSocketGateway({
   cors: { origin: '*' },
-  namespace: '/location', // Endpoint: ws://domain/location
+  namespace: '/location', // ให้หน้าบ้านต่อมาที่ ws://domain/location
 })
 export class LocationGateway {
   @WebSocketServer()
   server: Server;
 
-  // Inject Service เข้ามาเพื่อเอาไว้คุยกับ Database
-  constructor(private readonly locationService: LocationService) {}
+  constructor(private readonly coreLogicService: CoreLogicService) {}
 
-  // ---------------------------------------------------------
-  // รับ Event 'sync_gps' จาก Frontend
-  // ---------------------------------------------------------
-  @SubscribeMessage('sync_gps')
-  async handleSyncGps(
+  // รับ Event 'sync_location' จากที่ Frontend (นาย) ยิงมา
+  @SubscribeMessage('sync_location')
+  async handleSyncLocation(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { guest_id: string; lat: number; lng: number }
+    @MessageBody() payload: PositionPayload
   ) {
     try {
-      // 1. Persistence: โยนข้อมูลไปให้ Service บันทึกลง Database
-      await this.locationService.saveLocation(payload);
+      // 1. เรียก Service เพื่อจัดการ Guest และเซฟลง DB [cite: 141, 142, 289]
+      await this.coreLogicService.handlePositionUpdate(payload);
 
-      // 2. Broadcast: กระจายพิกัดใหม่ไปให้ "ทุกคนยกเว้นคนส่ง" (เพื่อประหยัดแบนด์วิดท์)
-      // ถ้าอยากให้ส่งหาทุกคนรวมถึงตัวเองด้วย ให้ใช้ this.server.emit(...)
+      // 2. Broadcast พิกัดนี้ให้คนอื่นใน 3D Scene เห็น 
       client.broadcast.emit('update_map', {
         guest_id: payload.guest_id,
-        lat: payload.lat,
-        lng: payload.lng,
+        mode: payload.mode,
+        geom: payload.geom,
+        floor_id: payload.floor_id,
         timestamp: new Date().toISOString(),
       });
 
-      // 3. Acknowledge: ตอบกลับคนส่งว่า "ระบบบันทึกและกระจายให้แล้วนะ"
-      return { status: 'success', message: 'GPS synced and broadcasted' };
-
+      // ตอบกลับให้หน้าบ้านรู้ว่าเซฟสำเร็จ
+      return { status: 'success' };
+      
     } catch (error) {
-      console.error(`❌ Error syncing GPS for ${payload.guest_id}:`, error.message);
-      return { status: 'error', message: 'Failed to sync GPS' };
+      console.error(`❌ Socket Error [${payload.guest_id}]:`, error.message);
+      return { status: 'error', message: 'Failed to sync position' };
     }
   }
 }
