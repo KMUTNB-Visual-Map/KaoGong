@@ -6,40 +6,38 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { CoreLogicService, PositionPayload } from './core-logic.service';
+import { LocationService, SyncPositionDto } from './location.service';
 
 @WebSocketGateway({
   cors: { origin: '*' },
-  namespace: '/location', // ให้หน้าบ้านต่อมาที่ ws://domain/location
+  namespace: '/location', // ให้หน้าบ้านต่อมาที่ ws://.../location
 })
 export class LocationGateway {
   @WebSocketServer()
   server: Server;
 
-  constructor(private readonly coreLogicService: CoreLogicService) {}
+  constructor(private readonly locationService: LocationService) {}
 
-  // รับ Event 'sync_location' จากที่ Frontend (นาย) ยิงมา
+  // รับ Event 'sync_location' 
   @SubscribeMessage('sync_location')
   async handleSyncLocation(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: PositionPayload
+    @MessageBody() payload: SyncPositionDto // รับ Payload เป็น x, y
   ) {
     try {
-      // 1. เรียก Service เพื่อจัดการ Guest และเซฟลง DB [cite: 141, 142, 289]
-      await this.coreLogicService.handlePositionUpdate(payload);
+      // 1. บันทึกลง Database (เรียกใช้ Service ด้านบน)
+      await this.locationService.saveLocation(payload);
 
-      // 2. Broadcast พิกัดนี้ให้คนอื่นใน 3D Scene เห็น 
+      // 2. กระจายข้อมูลให้คนอื่น (Broadcast) เผื่อมีคนอื่นเปิดแผนที่อยู่
       client.broadcast.emit('update_map', {
         guest_id: payload.guest_id,
         mode: payload.mode,
-        geom: payload.geom,
+        geom: payload.geom, // ส่ง x, y กลับไปให้หน้าบ้านอัปเดตแผนที่
         floor_id: payload.floor_id,
         timestamp: new Date().toISOString(),
       });
 
-      // ตอบกลับให้หน้าบ้านรู้ว่าเซฟสำเร็จ
       return { status: 'success' };
-      
     } catch (error) {
       console.error(`❌ Socket Error [${payload.guest_id}]:`, error.message);
       return { status: 'error', message: 'Failed to sync position' };
